@@ -3,7 +3,7 @@
 Plugin Name: Page Builder by SiteOrigin
 Plugin URI: https://siteorigin.com/page-builder/
 Description: A drag and drop, responsive page builder that simplifies building your website.
-Version: dev
+Version: 2.2.2
 Author: SiteOrigin
 Author URI: https://siteorigin.com
 License: GPL3
@@ -11,9 +11,9 @@ License URI: http://www.gnu.org/licenses/gpl.html
 Donate link: http://siteorigin.com/page-builder/#donate
 */
 
-define('SITEORIGIN_PANELS_VERSION', 'dev');
+define('SITEORIGIN_PANELS_VERSION', '2.2.2');
 if ( ! defined('SITEORIGIN_PANELS_JS_SUFFIX' ) ) {
-	define('SITEORIGIN_PANELS_JS_SUFFIX', '');
+	define('SITEORIGIN_PANELS_JS_SUFFIX', '.min');
 }
 define('SITEORIGIN_PANELS_BASE_FILE', __FILE__);
 
@@ -293,7 +293,6 @@ function siteorigin_panels_admin_enqueue_scripts( $prefix = '', $force = false )
 			) ),
 			'row_layouts' => apply_filters( 'siteorigin_panels_row_layouts', array() ),
 			'directory_enabled' => !empty( $directory_enabled ),
-			'copy_content' => siteorigin_panels_setting( 'copy-content' ),
 
 			// Settings for the contextual menu
 			'contextual' => array(
@@ -571,12 +570,9 @@ function siteorigin_panels_save_post( $post_id, $post ) {
 		$panels_data = siteorigin_panels_styles_sanitize_all( $panels_data );
 
 		// Because of issue #20299, we are going to save the preview into a different variable so we don't overwrite the actual data.
-		// https://core.trac.wordpress.org/ticket/20299
+		// https://core.trac.wordpress.org/panels_data/20299
 		if( !empty( $panels_data['widgets'] ) ) {
 			update_post_meta( $post_id, '_panels_data_preview', $panels_data );
-		}
-		else {
-			delete_post_meta( $post_id, '_panels_data_preview' );
 		}
 	}
 }
@@ -703,8 +699,6 @@ function siteorigin_panels_generate_css($post_id, $panels_data = false){
 	$panels_mobile_width = $settings['mobile-width'];
 	$panels_margin_bottom = $settings['margin-bottom'];
 
-	$panels_data = apply_filters( 'siteorigin_panels_data', $panels_data, $post_id );
-
 	$css = new SiteOrigin_Panels_Css_Builder();
 
 	$ci = 0;
@@ -802,15 +796,6 @@ function siteorigin_panels_generate_css($post_id, $panels_data = false){
 				) );
 
 			}
-		}
-	}
-
-	foreach ($panels_data['widgets'] as $widget_id => $widget) {
-		if (!empty($widget['panels_info']['style']['link_color'])) {
-			$selector = '#panel-' . $post_id . '-' . $widget['panels_info']['grid'] . '-' . $widget['panels_info']['cell'] . '-' . $widget['panels_info']['cell_index'] . ' a';
-			$css->add_css($selector, array(
-				'color' => $widget['panels_info']['style']['link_color']
-			));
 		}
 	}
 
@@ -917,6 +902,26 @@ function siteorigin_panels_render( $post_id = false, $enqueue_css = true, $panel
 	$panels_data = apply_filters( 'siteorigin_panels_data', $panels_data, $post_id );
 	if( empty( $panels_data ) || empty( $panels_data['grids'] ) ) return '';
 
+	// Filter the widgets to add indexes
+	if ( !empty( $panels_data['widgets'] ) ) {
+		$last_gi = 0;
+		$last_ci = 0;
+		$last_wi = 0;
+		foreach ( $panels_data['widgets'] as $wid => &$widget_info ) {
+
+			if ( $widget_info['panels_info']['grid'] != $last_gi ) {
+				$last_gi = $widget_info['panels_info']['grid'];
+				$last_ci = 0;
+				$last_wi = 0;
+			}
+			elseif ( $widget_info['panels_info']['cell'] != $last_ci ) {
+				$last_ci = $widget_info['panels_info']['cell'];
+				$last_wi = 0;
+			}
+			$widget_info['panels_info']['cell_index'] = $last_wi++;
+		}
+	}
+
 	if( is_rtl() ) $panels_data = siteorigin_panels_make_rtl( $panels_data );
 
 	// Create the skeleton of the grids
@@ -973,6 +978,8 @@ function siteorigin_panels_render( $post_id = false, $enqueue_css = true, $panel
 	}
 
 	echo apply_filters( 'siteorigin_panels_before_content', '', $panels_data, $post_id );
+	
+	$cell_count = 0; // added by binaykshrestha to access the corresponding $panel_data['grid_cells']
 
 	foreach ( $grids as $gi => $cells ) {
 
@@ -1002,7 +1009,8 @@ function siteorigin_panels_render( $post_id = false, $enqueue_css = true, $panel
 
 		foreach ( $cells as $ci => $widgets ) {
 			// Themes can add their own styles to cells
-			$cell_classes = apply_filters( 'siteorigin_panels_row_cell_classes', array('panel-grid-cell'), $panels_data );
+			// added by binaykshrestha : passed $cell_count as a parameter
+			$cell_classes = apply_filters( 'siteorigin_panels_row_cell_classes', array('panel-grid-cell'), $panels_data['grid_cells'][$cell_count++] ); 
 			$cell_attributes = apply_filters( 'siteorigin_panels_row_cell_attributes', array(
 				'class' => implode( ' ', $cell_classes ),
 				'id' => 'pgc-' . $post_id . '-' . $gi  . '-' . $ci
@@ -1410,10 +1418,6 @@ function siteorigin_panels_process_panels_data( $panels_data ){
 	// Process all widgets to make sure that panels_info is properly represented
 	if( !empty($panels_data['widgets']) && is_array($panels_data['widgets']) ) {
 
-		$last_gi = 0;
-		$last_ci = 0;
-		$last_wi = 0;
-
 		foreach( $panels_data['widgets'] as &$widget ) {
 
 			if( empty($widget['panels_info']) && !empty($widget['info']) ) {
@@ -1421,18 +1425,8 @@ function siteorigin_panels_process_panels_data( $panels_data ){
 				unset( $widget['info'] );
 			}
 
-			// Filter the widgets to add indexes
-			if ( $widget['panels_info']['grid'] != $last_gi ) {
-				$last_gi = $widget['panels_info']['grid'];
-				$last_ci = 0;
-				$last_wi = 0;
-			}
-			elseif ( $widget['panels_info']['cell'] != $last_ci ) {
-				$last_ci = $widget['panels_info']['cell'];
-				$last_wi = 0;
-			}
-			$widget['panels_info']['cell_index'] = $last_wi++;
 		}
+
 	}
 
 	return $panels_data;
